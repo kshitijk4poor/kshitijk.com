@@ -1,6 +1,6 @@
 # [kshitij](https://kshitijk.com)
 
-> My personal corner of the internet. Live at [kshitijk.com](https://kshitijk.com)
+> My personal corner of the internet. Live at [kshitijk.com / kshitij.md](https://kshitijk.com)
 
 ## Overview
 
