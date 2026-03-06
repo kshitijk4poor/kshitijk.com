@@ -1,0 +1,23 @@
+src/middleware.ts
+  008f8cceedc86084 1-172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.8",
+  "base_commit_sha": "65440e80871c610f59476bae80ff18aea833e86c",
+  "prompts": {
+    "008f8cceedc86084": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019cc494-3769-76a2-b831-dfcc90de1bd7",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "kshitij <82637225+kshitijk4poor@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 205,
+      "total_deletions": 33,
+      "accepted_lines": 172,
+      "overriden_lines": 0
+    }
+  }
+}
