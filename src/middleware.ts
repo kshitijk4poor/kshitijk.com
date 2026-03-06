@@ -1,6 +1,5 @@
 import { defineMiddleware } from "astro:middleware";
 import sharp from "sharp";
-import { fileURLToPath } from "node:url";
 import { SITE, SOCIALS } from "@consts";
 
 const CLI_USER_AGENT_PATTERN = /\b(curl|wget|httpie|xh)\b/i;
@@ -16,8 +15,7 @@ const COLORS = {
   dim: "\u001b[2m",
 } as const;
 
-const AVATAR_PATH = fileURLToPath(new URL("../public/kshitij.jpeg", import.meta.url));
-let cachedAvatarAnsi = "";
+let cachedAvatarAnsi: string | null = null;
 let avatarPromise: Promise<string> | null = null;
 
 const getSocialLink = (name: string): string | undefined =>
@@ -32,10 +30,16 @@ const padAround = (content: string): string =>
     .map((line) => `  ${line}`)
     .join("\n");
 
-const renderAvatarAnsi = async (width: number): Promise<string> => {
+const renderAvatarAnsi = async (avatarUrl: string, width: number): Promise<string> => {
   try {
+    const response = await fetch(avatarUrl, { cache: "force-cache" });
+    if (!response.ok) {
+      return "";
+    }
+
+    const input = Buffer.from(await response.arrayBuffer());
     const base = { r: 30, g: 30, b: 46 };
-    const srcMeta = await sharp(AVATAR_PATH).metadata();
+    const srcMeta = await sharp(input).metadata();
     const srcWidth = srcMeta.width ?? 0;
     const srcHeight = srcMeta.height ?? 0;
     if (!srcWidth || !srcHeight) {
@@ -48,7 +52,7 @@ const renderAvatarAnsi = async (width: number): Promise<string> => {
       Math.round((srcHeight / srcWidth) * targetWidth),
     );
 
-    const { data, info } = await sharp(AVATAR_PATH)
+    const { data, info } = await sharp(input)
       .ensureAlpha()
       .resize({ width: targetWidth, height: targetPixelHeight, fit: "cover" })
       .raw()
@@ -93,14 +97,18 @@ const renderAvatarAnsi = async (width: number): Promise<string> => {
   }
 };
 
-const getAvatarAnsi = async (): Promise<string> => {
-  if (cachedAvatarAnsi) {
+const getAvatarAnsi = async (origin: string): Promise<string> => {
+  if (cachedAvatarAnsi !== null) {
     return cachedAvatarAnsi;
   }
 
   if (!avatarPromise) {
-    avatarPromise = renderAvatarAnsi(48).then((value) => {
-      cachedAvatarAnsi = value;
+    const avatarUrl = new URL("/kshitij.jpeg", origin).toString();
+    avatarPromise = renderAvatarAnsi(avatarUrl, 48).then((value) => {
+      if (value) {
+        cachedAvatarAnsi = value;
+      }
+      avatarPromise = null;
       return value;
     });
   }
@@ -108,12 +116,12 @@ const getAvatarAnsi = async (): Promise<string> => {
   return avatarPromise;
 };
 
-const renderTerminalCard = async (): Promise<string> => {
+const renderTerminalCard = async (origin: string): Promise<string> => {
   const website = "https://kshitijk.com";
   const github = getSocialLink("github");
   const linkedin = getSocialLink("linkedin");
   const email = toLabelValue(getSocialLink("email"), SITE.EMAIL);
-  const avatar = await getAvatarAnsi();
+  const avatar = await getAvatarAnsi(origin);
 
   const lines: string[] = [COLORS.base];
   if (avatar) {
@@ -161,12 +169,12 @@ export const onRequest = defineMiddleware(async (context, next) => {
     return next();
   }
 
-  const body = await renderTerminalCard();
+  const body = await renderTerminalCard(url.origin);
   return new Response(request.method === "HEAD" ? null : body, {
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
       "Cache-Control": "public, max-age=0, s-maxage=600",
-      Vary: "User-Agent",
+      Vary: "User-Agent, Accept",
     },
   });
 });
