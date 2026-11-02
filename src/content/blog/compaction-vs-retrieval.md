@@ -1,19 +1,19 @@
 ---
 title: "Compaction is not a mistake (but rewriting memory might be)"
-description: "360 eval runs on real 500K-token agent sessions: what an agent should keep when its context fills up."
+description: "440 eval runs on real 500K-token agent sessions: what an agent should keep when its context fills up."
 date: "Nov 01 2026"
 ---
 
-Last week two ideas about long-running agents went around at the same time. Alexander Yue of Mainplane posted that ["compaction is a mistake"](https://x.com/alezander9/status/2115842998844178453): don't summarize when the context fills up, just start a fresh session that says "retrieve key context as you go". Cursor wrote about [dynamic context discovery](https://cursor.com/blog/dynamic-context-discovery): keep history as files and let the agent search them. A few days later Harrison Chase wrote that the hard part of agent memory is [deciding what to remember](https://x.com/hwchase17/status/2116553654857867330), not the data structure.
+Last week two ideas about long-running agents went around at the same time. Alexander Yue of Mainplane posted that ["compaction is a mistake"](https://x.com/alezander9/status/2115842998844178453): don't summarize when the context fills up, just start a fresh session that says "retrieve key context as you go". Cursor wrote about [dynamic context discovery](https://cursor.com/blog/dynamic-context-discovery): keep history as files and let the agent search them. A few days later Harrison Chase wrote that the hard part of agent memory is [deciding what to remember](https://x.com/hwchase17/status/2116553654857867330), not the data structure. And someone pointed me at [Headroom](https://github.com/headroomlabs-ai/headroom), which compresses tool outputs before they reach the model and promises "same answers, fewer tokens".
 
-I work on [Hermes Agent](https://github.com/NousResearch/hermes-agent), which does summarize when the context fills up. So instead of arguing about it on the timeline, I ran the experiment: 360 eval runs over 8 of my own real agent sessions, each cut at 500K tokens, on two model families (DeepSeek V4.1 Flash and Claude Haiku 5.5).
+I work on [Hermes Agent](https://github.com/NousResearch/hermes-agent), which does summarize when the context fills up. So instead of arguing about it on the timeline, I ran the experiment: 440 eval runs over 8 of my own real agent sessions, each cut at 500K tokens, on two model families (DeepSeek V4.1 Flash and Claude Haiku 5.5).
 
-Short version: keep the summary. Use retrieval for facts, not for deciding what to do next. And stop rewriting your memory every time you compact.
+Short version: keep the summary. Use retrieval for facts, not for deciding what to do next. Stop rewriting your memory every time you compact. And if you compress tool output, never hand the compressed version to the summarizer.
 
 Everything is public:
 
 - The [full report](https://artifacts.kshitij.md/compaction-vs-retrieval/) has every table and per-session number.
-- The [run explorer](https://artifacts.kshitij.md/compaction-vs-retrieval/runs/) has all 360 runs. Click any score to see each question, the gold answer, what the model said, how the judge scored it, every search it ran, and the summary it was given. "Compare across setups" puts one question next to every setup's answer.
+- The [run explorer](https://artifacts.kshitij.md/compaction-vs-retrieval/runs/) has all 440 runs. Click any score to see each question, the gold answer, what the model said, how the judge scored it, every search it ran, and the summary it was given. "Compare across setups" puts one question next to every setup's answer.
 
 ## What I'd change
 
@@ -21,7 +21,8 @@ Everything is public:
 2. Make the lookup path actually work for facts, and make tool output searchable. That one change is worth about +11 points of fact recall.
 3. Nudge the agent to look things up before *stating* a specific fact, not before *acting*. Telling it to dig through history before acting cost 10 to 24 points.
 4. When you compact repeatedly, don't feed the old summary back in to be rewritten. Carry facts forward in an append-only ledger.
-5. Don't bother tuning the summary prompt. Extra headings made summaries shorter and worse.
+5. If you compress tool output, do it only in the live window and keep a way to get the original back. Never summarize the compressed version.
+6. Don't bother tuning the summary prompt. Extra headings made summaries shorter and worse.
 
 ## What I found
 
@@ -31,11 +32,13 @@ I gave the agent two exams after compaction. The needle exam asks 15 specific qu
 
 | Setup | Fact recall | Orientation | Context |
 |---|---|---|---|
-| Full 500K transcript | 96.7 | 47.5 | 497K |
+| Full 500K transcript | 97.5 | 76.7 | 497K |
 | Summary + multi-step search | 93.8 | 48.9 | 68K |
 | No summary + multi-step search (Mainplane style) | 89.6 | 15.9 | 60K |
 
 Without a summary the agent still finds facts when you ask about them. But orientation falls from 49% to 16%, and the summary wins on 7 of 8 sessions. Haiku shows the same 34-point drop. Searching works when you know what you're looking for. You can't search for a rule you don't remember exists.
+
+The summary isn't free on this axis either: the full transcript covers 77% of the checklist, the summary about 50%. Compaction keeps the facts you ask about and loses about a third of the "what did I forget" stuff. (An earlier version of this post said the full transcript only scored 47.5 here. That was a bug in my baseline, explained below.)
 
 Dead ends are the worst-remembered thing everywhere. Even the best setup lists only about 40% of the approaches that already failed, and without a summary it drops to about 11%. That's how an agent ends up retrying something it already ruled out an hour ago. [Compare the "list every dead end" answers](https://artifacts.kshitij.md/compaction-vs-retrieval/runs/#cell=deepseek%2FS1%2Fnone__agentic4&q=orient-1).
 
@@ -46,6 +49,7 @@ Q&A exams flatter retrieval, because the question hands the agent its search que
 | Setup | DeepSeek | Haiku |
 |---|---|---|
 | Summary, no tools | **64.4** | **66.9** |
+| Full 500K transcript, no summary | 54.4 | (doesn't fit) |
 | Summary + search tools, neutral prompt | 54.4 | 42.5 |
 | Summary + search, "look things up" prompt | 48.8 | 48.1 |
 | No summary + search (Mainplane style) | 48.1 | 50.6 |
@@ -54,9 +58,11 @@ This surprised me. Giving the agent search tools made it worse at picking the ne
 
 I can't fully rule out that it only searches when it's already confused. But in no setup did lookups help it continue the work.
 
+The full transcript lost too: 54 against the summary's 64 (worse on 5 of 8 sessions). The raw history remembers more when you ask it something, but a summary focuses the next step better than half a million tokens of everything.
+
 ### Make tool output searchable
 
-When the agent is asked a fact, the summary plus a multi-step search gets within 3 points of the full transcript at about a seventh of the tokens. Most of that comes from one change: letting search see tool output. The error text, command output and file contents all live in tool results.
+When the agent is asked a fact, the summary plus a multi-step search gets within 4 points of the full transcript (93.8 vs 97.5) at about a seventh of the tokens. Most of that comes from one change: letting search see tool output. The error text, command output and file contents all live in tool results.
 
 | Search over | Fact recall |
 |---|---|
@@ -91,6 +97,30 @@ My guess at the right design is both: a rolling "where are we now" section, plus
 - Raising the summary's log budget from 4K to 12K tokens did nothing. The summaries came out the same length.
 - Rewording the recovery instruction was worth at most 3 points.
 - A "the summary is lossy, verify specifics before stating them" rule helped Haiku (+3.7) and did nothing for DeepSeek. Haiku trusts the summary too much: it searched only 38 of 120 fact questions with a summary in context, against 91 without.
+
+### Compressing tool output (Headroom)
+
+[Headroom](https://github.com/headroomlabs-ai/headroom) squeezes tool outputs (big JSON, logs, file dumps) and leaves a marker like `<<ccr:HASH>>` so the model can fetch the original with a `headroom_retrieve` tool. I ran its default `compress()` over every session, locally with telemetry off. It cut 18 to 40% of the tokens, about 29% on average, almost all from tool outputs. That's real, but a 500K session still comes out at 300 to 400K tokens, so it delays compaction rather than replacing it.
+
+| Setup (DeepSeek) | Fact recall | Orientation | Context |
+|---|---|---|---|
+| Full transcript | 97.5 | 76.7 | 497K |
+| Full transcript, Headroom-compressed | 90.0 | 64.3 | 353K |
+| Same, plus its retrieve tool | 93.8 | 70.1 | 353K |
+| Summary + search | 92.5 | 50.8 | 68K |
+| Summary built from the Headroom-compressed transcript | 70.0 | 39.1 | 66K |
+
+Three things stood out:
+
+- "Same answers" didn't hold for long sessions. Compressed in place, fact recall dropped 7.5 points and orientation 12. The retrieve tool won back about half of that, but the model only called it 31 times across 152 questions. It trusts what it can see, same as Haiku with a summary.
+- Don't summarize compressed content. A summary written from the compressed transcript lost up to 12 orientation points on DeepSeek and 8 fact points on Haiku. The summarizer reads the markers instead of the content and writes a shorter summary.
+- If your window is big enough to hold it, compressed history beats a summary on orientation (64 against 51), at five times the tokens.
+
+### A bug in my own baseline
+
+While setting up the Headroom runs I found that my "full transcript" baseline wasn't full. The harness turns the transcript into text and caps it at 900K characters by cutting out the middle. These sessions are 1.3 to 1.8M characters, so the baseline never saw the middle ~45%.
+
+The fact questions were written from the same first and last chunks, so fact recall was a fair fight (96.7 with the cut, 97.5 without). Orientation wasn't: its checklists cover the whole session, and the cut baseline scored 47.5 against 76.7 for the complete one. The continuation baseline had the same cut (45 against 54). I've rerun all three with nothing cut. Every other setup in this post was unaffected, and none of the conclusions flip. The summary just looks less complete on orientation than I first said.
 
 ## How the tests work
 
@@ -132,7 +162,7 @@ Eight of my own Hermes sessions, all long agent-development work: PR reviews and
 
 The questions and checklists are generated once per session before any run starts, so every setup takes the same exam. Each compaction is computed once and shared by every setup that uses it, so a lucky or unlucky summary can't explain a difference. Round 1 used DeepSeek V4.1 Flash for everything. Later rounds repeat the key setups with Claude Haiku 5.5 writing the summary and answering, keeping DeepSeek as the judge and the same exams.
 
-### The five rounds
+### The six rounds
 
 | Round | What it tested | Runs |
 |---|---|---|
@@ -141,8 +171,9 @@ The questions and checklists are generated once per session before any run start
 | 3 | The continuation exam, a "verify against the archive" rule, a bigger summary budget | 88 |
 | 4 | Rolling summary vs append-only notes | 32 |
 | 5 | Neutral-prompt continuation, memory designs on continuation, notes on Haiku | 48 |
+| 6 | Headroom compression, plus the uncut full-transcript baseline | 80 |
 
-One Hermes summary costs one LLM call: about 48K tokens in, 12K out, roughly 90 seconds on a flash model. Round 1 alone was about 236M prompt tokens of evaluation, mostly from the full-transcript ceiling, which re-reads 500K tokens for every question.
+One Hermes summary costs one LLM call: about 48K tokens in, 12K out, roughly 90 seconds on a flash model. Round 1 alone was about 236M prompt tokens of evaluation, mostly from the full-transcript baseline, which re-reads the whole history for every question.
 
 ## Browse the runs
 
@@ -158,7 +189,7 @@ Text is shown as the models wrote it. Home paths, hostnames, emails, session IDs
 ## Caveats
 
 - Eight sessions, all agent development work from one person.
-- The orientation exam is noisy. Even the full transcript only scores 47.5, so I'd ignore differences under ~10 points there.
+- Orientation scores swing a lot between sessions, so I'd ignore orientation differences under ~10 points.
 - The continuation test compares against one sample of what the agent did, so 100% isn't reachable. Compare setups, not absolute scores.
 - The search tools in the harness are simulated (BM25 and regex over the archived history), not Hermes' production tool.
 - I didn't benchmark cost or latency, so I can't say anything about the dollar figures in the original tweet.
