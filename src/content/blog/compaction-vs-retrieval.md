@@ -50,6 +50,7 @@ Q&A exams flatter retrieval, because the question hands the agent its search que
 |---|---|---|
 | Summary, no tools | **64.4** | **66.9** |
 | Full 500K transcript, no summary | 54.4 | (doesn't fit) |
+| Full transcript, Headroom-compressed | 53.1 | (doesn't fit) |
 | Summary + search tools, neutral prompt | 54.4 | 42.5 |
 | Summary + search, "look things up" prompt | 48.8 | 48.1 |
 | No summary + search (Mainplane style) | 48.1 | 50.6 |
@@ -109,12 +110,19 @@ My guess at the right design is both: a rolling "where are we now" section, plus
 | Same, plus its retrieve tool | 93.8 | 70.1 | 353K |
 | Summary + search | 92.5 | 50.8 | 68K |
 | Summary built from the Headroom-compressed transcript | 70.0 | 39.1 | 66K |
+| Same, plus search | 90.8 | 41.9 | 66K |
 
-Three things stood out:
+On Haiku, the summary built from compressed input lost 8.3 fact points with no lookup (worse on 6 of 8 sessions, better on none) and 6.3 orientation points with search.
+
+What stood out:
 
 - "Same answers" didn't hold for long sessions. Compressed in place, fact recall dropped 7.5 points and orientation 12. The retrieve tool won back about half of that, but the model only called it 31 times across 152 questions. It trusts what it can see, same as Haiku with a summary.
-- Don't summarize compressed content. A summary written from the compressed transcript lost up to 12 orientation points on DeepSeek and 8 fact points on Haiku. The summarizer reads the markers instead of the content and writes a shorter summary.
+- Don't summarize compressed content. A summary written from the compressed transcript lost 12 orientation points on DeepSeek (worse on 6 of 8 sessions) and 8 fact points on Haiku. The summarizer reads the markers instead of the content and writes a shorter summary (9.9K tokens against 12.2K). Adding search wins the facts back (within 2 points) but not the orientation (still 6 to 9 points down on both models).
+- The one place it helped was continuation: the summary built from compressed input scored 70.0 against 64.4 (better on 4 sessions, worse on 1). My read is that a summary with less tool detail in it is more about the current task. That's one result on one model, and it cost 12 orientation points to get, so I wouldn't build on it.
+- Compressing the full transcript didn't change continuation (53.1 against 54.4 uncompressed). It still trailed the summary by about 11.
 - If your window is big enough to hold it, compressed history beats a summary on orientation (64 against 51), at five times the tokens.
+
+One caveat on how this maps to production. I compressed each whole 500K session in one pass, which is the worst case for loss and the best case for savings. Headroom's proxy only compresses the "live zone" (the newest user message and the latest tool output) and forwards older turns unchanged, so in real use old content is whatever the client sent. Whether that's the original or the compressed version depends on what the agent stores. Headroom ships a [Hermes plugin](https://docs.headroomlabs.ai/docs/hermes) that adds `headroom_retrieve` as a native tool. Its docs suggest excluding `read_file`, since Hermes' tool names don't match the Claude Code file tools that Headroom protects by default. My runs used the default config, so file reads got compressed too.
 
 ### A bug in my own baseline
 
